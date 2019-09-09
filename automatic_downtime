@@ -1,0 +1,211 @@
+#!/bin/bash -e
+#
+# Automatic host downtime for Icinga 2
+# Copyright (c) {{ 2019 }} - {{ Carsten Koebke }} <{{ carsten.koebke@ckc-it.de }}>
+#
+# Built with shell-script-skeleton v0.0.3 <http://github.com/z017/shell-script-skeleton>
+
+#######################################
+# SCRIPT CONSTANTS & VARIABLES
+#######################################
+
+# Script version
+readonly VERSION=0.0.1
+
+# List of required tools
+readonly REQUIRED_TOOLS=( curl )
+
+# Long Options. To expect an argument for an option, just place a : (colon)
+# after the proper option flag.
+readonly LONG_OPTS=( help version host: attempt: downtimedepth: length: maxattempts: state: type: )
+
+# Short Options. To expect an argument for an option, just place a : (colon)
+# after the proper option flag.
+readonly SHORT_OPTS=hva:d:l:m:s:t:H:
+
+# Script name
+readonly SCRIPT_NAME=${0##*/}
+
+#######################################
+# SCRIPT CONFIGURATION CONSTANTS
+#######################################
+
+readonly DOWNTIME_AUTHOR="Automatic Downtime"
+readonly API_HOST="localhost"
+readonly API_PORT="5665"
+readonly API_USERNAME="root"
+readonly API_PASSWD="d6312b5777a8c8ba"
+readonly API_SET_DOWNTIME="schedule-downtime"
+readonly API_REMOVE_DOWNTIME="remove-downtime"
+
+
+#######################################
+# help command
+#######################################
+function help_command() {
+  cat <<END;
+
+USAGE:
+  $SCRIPT_NAME [options] <command>
+
+OPTIONS:
+  --state, -s             State of the host
+  --host, -H              Name of the Icinga2 host object
+  --type, -t              State type
+  --attempt, -a           Attempt number
+  --maxattempts, -m       Max check attempts of the host object
+  --downtimedepth, -d     Downtime depth of the host
+  --length, -l            Length of the downtime
+  --help, -h              Alias help command
+  --version, -v           Alias version command
+
+COMMANDS:
+  help                    Display detailed help
+  version                 Print version information.
+
+END
+}
+
+#######################################
+# version command
+#######################################
+function version_command() {
+  echo "$SCRIPT_NAME version $VERSION"
+}
+
+#######################################
+# FUNCTIONS
+#######################################
+
+# Print out messages to STDERR.
+function ech() { echo -e "$@" >&2; }
+
+# Print out error messages to STDERR.
+function err() { echo -e "\033[0;31mERROR: $@\033[0m" >&2;  }
+
+# Shows an error if required tools are not installed.
+function required {
+  local e=0
+  for tool in "$@"; do
+    type $tool >/dev/null 2>&1 || {
+      e=1 && err "$tool is required for running this script. Please install $tool and try again."
+    }
+  done
+  [[ $e < 1 ]] || exit 2
+}
+
+#######################################
+#
+# MAIN
+#
+#######################################
+function main() {
+  # Required tools
+  required ${REQUIRED_TOOLS[@]}
+
+  # Parse options
+  while [[ $# -ge $OPTIND ]] && eval opt=\${$OPTIND} || break
+        [[ $opt == -- ]] && shift && break
+        if [[ $opt == --?* ]]; then
+          opt=${opt#--}; shift
+
+          # Argument to option ?
+          OPTARG=;local has_arg=0
+          [[ $opt == *=* ]] && OPTARG=${opt#*=} && opt=${opt%=$OPTARG} && has_arg=1
+
+          # Check if known option and if it has an argument if it must:
+          local state=0
+          for option in "${LONG_OPTS[@]}"; do
+            [[ "$option" == "$opt" ]] && state=1 && break
+            [[ "${option%:}" == "$opt" ]] && state=2 && break
+          done
+          # Param not found
+          [[ $state = 0 ]] && OPTARG=$opt && opt='?'
+          # Param with no args, has args
+          [[ $state = 1 && $has_arg = 1 ]] && OPTARG=$opt && opt=::
+          # Param with args, has no args
+          if [[ $state = 2 && $has_arg = 0 ]]; then
+            [[ $# -ge $OPTIND ]] && eval OPTARG=\${$OPTIND} && shift || { OPTARG=$opt; opt=:; }
+          fi
+
+          # for the while
+          true
+        else
+          getopts ":$SHORT_OPTS" opt
+        fi
+  do
+    case "$opt" in
+      # List of options
+      a|attempt)          ATTEMPT="${OPTARG}" ;;
+      d|downtimedepth)    DOWNTIMEDEPTH="${OPTARG}" ;;
+      l|length)           LENGTH="${OPTARG}" 
+                          case $LENGTH in
+                            ''|*[!0-9]*) err "Downtime lenght is not an integer"; exit 1;  ;;
+                          esac
+                          ;;
+      m|maxattempts)      MAXATTEMPTS="${OPTARG}" ;;
+      s|state)            STATE="${OPTARG}" ;;
+      t|type)             TYPE="${OPTARG}" ;;
+      H|host)             HOST="${OPTARG}" ;;
+      v|version)          version_command; exit 0; ;;
+      h|help)             help_command ; exit 0;;
+      # Errors
+      ::)	err "Unexpected argument to option '$OPTARG'"; exit 2; ;;
+      :)	err "Missing argument to option '$OPTARG'"; exit 2; ;;
+      \?)	err "Unknown option '$OPTARG'"; exit 2; ;;
+      *)	err "Internal script error, unmatched option '$opt'"; exit 2; ;;
+    esac
+  done
+
+  #######################################
+  # Host down, set downtime
+  #######################################
+  if [[ ${ATTEMPT} -eq $(( ${MAXATTEMPTS} -1 )) && "${STATE}" = "DOWN" ]]; then
+     logger -t icingadowntime "Setting downtime for host $HOST"
+     curl -k -s --output /dev/null -u ''${API_USERNAME}':'${API_PASSWD}'' -H 'Accept: application/json' \
+          -X POST "https://${API_HOST}:${API_PORT}/v1/actions/${API_SET_DOWNTIME}" \
+          -d "{ \"type\": \"Host\", \"filter\": \"host.name==\\\"${HOST}\\\"\", \"start_time\": $(date +%s), \"end_time\": $(date +%s -d "+${LENGTH} seconds"), \"duration\": 1000, \"author\": \"${DOWNTIME_AUTHOR}\", \"comment\": \"Automatic Downtime set on $(date)\", \"pretty\": true }"
+
+     if [[ $? -ne 0 ]]; then
+       logger -t icingadowntime "Could not set downtime for host ${HOST}!"
+     fi
+
+     logger -t icingadowntime "Setting downtime for all services on host $HOST"
+     curl -k -s --output /dev/null -u ''${API_USERNAME}':'${API_PASSWD}'' -H 'Accept: application/json' \
+          -X POST "https://${API_HOST}:${API_PORT}/v1/actions/${API_SET_DOWNTIME}" \
+          -d "{ \"type\": \"Service\", \"filter\": \"host.name==\\\"${HOST}\\\"\", \"start_time\": $(date +%s), \"end_time\": $(date +%s -d "+${LENGTH} seconds"), \"duration\": 1000, \"author\": \"${DOWNTIME_AUTHOR}\", \"comment\": \"Automatic Downtime set on $(date)\", \"pretty\": true }"
+
+     if [[ $? -ne 0 ]]; then
+       logger -t icingadowntime "Could not set downtime for all services on host ${HOST}!"
+     fi
+  fi
+
+  #######################################
+  # Host up, remove downtime
+  #######################################
+  if [[ "${STATE}" = "UP" && "${TYPE}" = "HARD" ]]; then
+     logger -t icingadowntime "Removing downtime for host $HOST"
+     curl -k -s --output /dev/null -u ''${API_USERNAME}':'${API_PASSWD}'' -H 'Accept: application/json' \
+          -X POST "https://${API_HOST}:${API_PORT}/v1/actions/${API_REMOVE_DOWNTIME}" \
+          -d "{ \"type\": \"Downtime\", \"filter\": \"host.name == \\\"${HOST}\\\" && !service && downtime.author == \\\"${DOWNTIME_AUTHOR}\\\"\", \"pretty\": true }"
+     
+     if [[ $? -ne 0 ]]; then
+       logger -t icingadowntime "Could not remove downtime for host ${HOST}!"
+     fi
+
+     logger -t icingadowntime "Removing downtime for all services on host $HOST"
+     curl -k -s --output /dev/null -u ''${API_USERNAME}':'${API_PASSWD}'' -H 'Accept: application/json' \
+          -X POST "https://${API_HOST}:${API_PORT}/v1/actions/${API_REMOVE_DOWNTIME}" \
+          -d "{ \"type\": \"Downtime\", \"filter\": \"host.name == \\\"${HOST}\\\" && service && downtime.author == \\\"${DOWNTIME_AUTHOR}\\\"\", \"pretty\": true }"
+
+     if [[ $? -ne 0 ]]; then
+       logger -t icingadowntime "Could not remove downtime for all services on host ${HOST}!"
+     fi
+  fi
+
+}
+#######################################
+# Run the script
+#######################################
+main "$@"
+
