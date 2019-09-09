@@ -10,7 +10,7 @@ Icinga2 eventhandler Script to set an automatic downtime for a host and its serv
    
 ## Installation
 
- 1. Copy the eventhandler-automatic-downtime.conf into your Icinga2 configuration folder.
+ 1. Copy the `eventhandler-automatic-downtime.conf` into your Icinga2 configuration folder.
  2. Copy the script `automtic-downtime` into your Icinga2 `PluginDir`.
  3. Edit `automtic-downtime` and edit these variables to fit your environment:
  ```bash
