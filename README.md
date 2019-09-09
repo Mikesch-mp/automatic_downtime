@@ -20,6 +20,7 @@ readonly API_PORT="5665"
 readonly API_USERNAME="root"
 readonly API_PASSWD="d6312b5777a8c8ba"
 ```
+ 4. Create a api user with the rights to set and remove downtimes.
 
 ## Configuration
 
